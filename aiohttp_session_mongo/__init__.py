@@ -1,5 +1,4 @@
 from aiohttp_session import AbstractStorage, Session
-from bson import ObjectId
 from datetime import datetime, timedelta
 import uuid
 
@@ -20,9 +19,11 @@ class MongoStorage(AbstractStorage):
         self._collection = collection
         self._key_factory = key_factory
         self._expire_index_created = False
+        self._key_to_id_migrated = False
 
     async def load_session(self, request):
         await self._create_expire_index()
+        await self._migrate_key_to_id()
 
         cookie = self.load_cookie(request)
         if cookie is None:
@@ -32,29 +33,12 @@ class MongoStorage(AbstractStorage):
             stored_key = (self.cookie_name + '_' + key).encode('utf-8')
             data_row = await self._collection.find_one(
                 filter={
-                    '$and': [
-                        {
-                            '$or': [
-                                {'_id': stored_key},
-                                {'key': stored_key},
-                            ],
-                        }, {
-                            '$or': [
-                                {'expire': None},
-                                {'expire': {'$gt': datetime.utcnow()}}
-                            ]
-                        }
+                    '_id': stored_key,
+                    '$or': [
+                        {'expire': None},
+                        {'expire': {'$gt': datetime.utcnow()}}
                     ]
                 })
-
-            if data_row and isinstance(data_row['_id'], ObjectId):
-                # migrate to the new schema where key is stored in _id
-                new_data_row = dict(data_row)
-                new_data_row['_id'] = data_row['key']
-                del new_data_row['key']
-                await self._collection.insert_one(new_data_row)
-                await self._collection.delete_one({'_id': data_row['_id']})
-                data_row = new_data_row
 
             if data_row is None:
                 return Session(None, data=None,
@@ -71,6 +55,31 @@ class MongoStorage(AbstractStorage):
             await self._collection.create_index([("expire", 1)],
                                                 expireAfterSeconds=0)
             self._expire_index_created = True
+
+    async def _migrate_key_to_id(self):
+        from pymongo.errors import BulkWriteError
+        if not self._key_to_id_migrated:
+            while True:
+                query = {'_id': {'$type': 'objectId'}}
+                batch = await self._collection.find(query).to_list(1000)
+                if not batch:
+                    break
+                to_insert = []
+                to_delete = []
+                for doc in batch:
+                    new_doc = dict(doc)
+                    new_doc['_id'] = doc['key']
+                    del new_doc['key']
+                    to_insert.append(new_doc)
+                    to_delete.append(doc['_id'])
+                try:
+                    await self._collection.insert_many(
+                        to_insert, ordered=False)
+                except BulkWriteError:
+                    # some ids are already present
+                    pass
+                await self._collection.delete_many({'_id': {'$in': to_delete}})
+            self._key_to_id_migrated = True
 
     async def save_session(self, request, response, session):
         await self._create_expire_index()
