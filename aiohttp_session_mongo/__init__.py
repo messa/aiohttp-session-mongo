@@ -31,12 +31,24 @@ class MongoStorage(AbstractStorage):
             stored_key = (self.cookie_name + '_' + key).encode('utf-8')
             data_row = await self._collection.find_one(
                 filter={
-                    '_id': stored_key,
+                    '$or': [
+                        {'_id': stored_key},
+                        {'key': stored_key},
+                    ],
                     '$or': [
                         {'expire': None},
                         {'expire': {'$gt': datetime.utcnow()}}
                     ]
                 })
+
+            if data_row and isinstance(data_row['_id'], ObjectId):
+                # migrate to the new schema where key is stored in _id
+                new_data_row = dict(data_row)
+                new_data_row['_id'] = data_row['key']
+                del new_data_row['key']
+                await self._collection.insert_one(new_data_row)
+                await self._collection.delete_one({'_id': data_row['_id']})
+                data_row = new_data_row
 
             if data_row is None:
                 return Session(None, data=None,
