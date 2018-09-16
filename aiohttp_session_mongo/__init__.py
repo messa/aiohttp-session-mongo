@@ -1,4 +1,5 @@
 from aiohttp_session import AbstractStorage, Session
+from bson import ObjectId
 from datetime import datetime, timedelta
 import uuid
 
@@ -31,13 +32,18 @@ class MongoStorage(AbstractStorage):
             stored_key = (self.cookie_name + '_' + key).encode('utf-8')
             data_row = await self._collection.find_one(
                 filter={
-                    '$or': [
-                        {'_id': stored_key},
-                        {'key': stored_key},
-                    ],
-                    '$or': [
-                        {'expire': None},
-                        {'expire': {'$gt': datetime.utcnow()}}
+                    '$and': [
+                        {
+                            '$or': [
+                                {'_id': stored_key},
+                                {'key': stored_key},
+                            ],
+                        }, {
+                            '$or': [
+                                {'expire': None},
+                                {'expire': {'$gt': datetime.utcnow()}}
+                            ]
+                        }
                     ]
                 })
 
