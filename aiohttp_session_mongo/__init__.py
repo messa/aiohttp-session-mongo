@@ -8,6 +8,13 @@ __version__ = '0.0.1'
 logger = getLogger(__name__)
 
 
+class MySession (Session):
+    def __init__(self, *args, **kwargs):
+        logger.debug('[Session] args=%r kwargs=%r', args, kwargs)
+        super().__init__(*args, **kwargs)
+        logger.debug('[Session] _mapping=%r', getattr(self, '_mapping', '-'))
+
+
 class MongoStorage(AbstractStorage):
     def __init__(self, collection, *, cookie_name="AIOHTTP_SESSION",
                  domain=None, max_age=None, path='/',
@@ -49,9 +56,11 @@ class MongoStorage(AbstractStorage):
 
             try:
                 data = self._decoder(data_row['data'])
-            except ValueError:
+            except ValueError as e:
+                logger.info('[load_session] decoder failed: %r', e)
                 data = None
-            return Session(key, data=data, new=False, max_age=self.max_age)
+            logger.debug('[load_session] -> Session(%r, data=%r, new=False, max_age=%r)', key, data, self.max_age)
+            return MySession(key, data=data, new=False, max_age=self.max_age)
 
     async def _create_expire_index(self):
         if not self._expire_index_created:
