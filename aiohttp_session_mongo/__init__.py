@@ -1,8 +1,11 @@
 from aiohttp_session import AbstractStorage, Session
 from datetime import datetime, timedelta
+from logging import getLogger
 import uuid
 
 __version__ = '0.0.1'
+
+logger = getLogger(__name__)
 
 
 class MongoStorage(AbstractStorage):
@@ -38,6 +41,8 @@ class MongoStorage(AbstractStorage):
                     ]
                 })
 
+            logger.debug('[load_session] find_one(_id: %r) -> %r', stored_key, data_row)
+
             if data_row is None:
                 return Session(None, data=None,
                                new=True, max_age=self.max_age)
@@ -50,16 +55,19 @@ class MongoStorage(AbstractStorage):
 
     async def _create_expire_index(self):
         if not self._expire_index_created:
+            logger.debug('[_create_expire_index]')
             await self._collection.create_index([("expire", 1)],
                                                 expireAfterSeconds=0)
             self._expire_index_created = True
 
     async def save_session(self, request, response, session):
         await self._create_expire_index()
+        logger.debug('[save_session] session.identity=%r session.empty=%r', session.identity, session.empty)
 
         key = session.identity
         if key is None:
             key = self._key_factory()
+            logger.debug('[save_session] key from key factory: %r', key)
             self.save_cookie(response, key,
                              max_age=session.max_age)
         else:
@@ -75,7 +83,7 @@ class MongoStorage(AbstractStorage):
         expire = datetime.utcnow() + timedelta(seconds=session.max_age) \
             if session.max_age is not None else None
         stored_key = (self.cookie_name + '_' + key).encode('utf-8')
-        await self._collection.update_one(
+        res = await self._collection.update_one(
             {'_id': stored_key},
             {
                 "$set": {
@@ -84,3 +92,6 @@ class MongoStorage(AbstractStorage):
                 }
             },
             upsert=True)
+        logger.debug(
+            '[save_session] upsert res.matched_count=%r res.modified_count=%r',
+            res.matched_count, res.modified_count)
